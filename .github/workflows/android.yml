@@ -31,7 +31,7 @@ jobs:
           SDKMANAGER="${ANDROID_HOME:-/usr/local/lib/android/sdk}/cmdline-tools/latest/bin/sdkmanager"
           "$SDKMANAGER" --version
           yes | "$SDKMANAGER" --licenses >/dev/null || true
-          "$SDKMANAGER" "platforms;android-36" "build-tools;36.0.0" "ndk;27.0.12077973"
+          "$SDKMANAGER" "platforms;android-37.0" "build-tools;37.0.0" "ndk;27.0.12077973"
 
       - name: Set up Go
         uses: actions/setup-go@v5
