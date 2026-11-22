@@ -1221,8 +1221,9 @@ class GatewayRuntimeIntegrationTest {
         transport.receive("""{"kind":"hello","authenticated":true,"capabilities":["session-create","commands"]}""")
         runCurrent()
 
-        assertTrue(runtime.sendRequest(GatewayRequests.createSession("create-1", "workspace-1")))
+        assertTrue(runtime.sendRequest(GatewayRequests.createSession("create-1", "workspace-1", "ops")))
         assertTrue(transport.sentPayloads.last().contains("\"workspaceId\":\"workspace-1\""))
+        assertTrue(transport.sentPayloads.last().contains("\"agentPreset\":\"ops\""))
         transport.receive("""{"kind":"session-created","requestId":"stale","sessionId":"wrong"}""")
         runCurrent()
         assertTrue(events.filterIsInstance<GatewayRuntimeEvent.Frame>().none { it.frame.kind == "session-created" })

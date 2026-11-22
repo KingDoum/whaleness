@@ -96,7 +96,7 @@ internal fun WorkspaceSelectionMenu(
             .testTag("workspace-menu"),
         offset = DpOffset(14.dp, (-8).dp)) {
         WorkspaceMenuItem(
-            title = appText("全部会话"),
+            title = appText("全部场景"),
             icon = if (effectiveSelection == AndroidSharedStateHolder.ALL_WORKSPACES_ID) {
                 WorkspaceMenuIcon.Selected
             } else {

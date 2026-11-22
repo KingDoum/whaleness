@@ -1,8 +1,6 @@
 package com.clarklevis.dsh.android.ui
 
-import com.clarklevis.dsh.android.AndroidSharedStateHolder
 import com.clarklevis.dsh.shared.domain.SessionSummary
-import com.clarklevis.dsh.shared.protocol.GatewayWorkspace
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -25,83 +23,130 @@ class WorkspaceSessionSectionsTest {
         for (count in listOf(0, 1, 12)) {
             assertEquals(count, recentWorkspaceSessionEntries(rows.take(count), "w1").size)
         }
-        val ungrouped = AndroidSharedStateHolder.UNGROUPED_WORKSPACE_ID
-        assertEquals(rows.size, recentWorkspaceSessionEntries(rows, ungrouped, setOf("recent-$ungrouped"))
-            .filterIsInstance<WorkspaceSessionListEntry.Session>().size)
+    }
+
+    @Test
+    fun knownScenesStayVisibleWhenEmptyAndMissingPresetFallsBackToUngrouped() {
+        val entries = allSceneSessionEntries(
+            sessions = listOf(session("alpha-1", 10.0, "alpha"), session("loose", 20.0, null)),
+            scenes = listOf(scene("alpha"), scene("beta"))
+        )
+
+        assertEquals(
+            listOf("alpha", "beta", UNGROUPED_SCENE_SECTION_ID),
+            entries.filterIsInstance<WorkspaceSessionListEntry.Header>().map { it.sectionId }
+        )
+        assertEquals(listOf(1, 0, 1), entries.filterIsInstance<WorkspaceSessionListEntry.Header>().map { it.count })
+        assertEquals("alpha", entries.filterIsInstance<WorkspaceSessionListEntry.Header>().first().agentPresetId)
+        assertEquals(null, entries.filterIsInstance<WorkspaceSessionListEntry.Header>().last().agentPresetId)
     }
 
     @Test
     fun exactlyFiveStayVisibleWhileLargerAndUngroupedSectionsCollapse() {
-        val small = sessions("small", 5)
-        val large = sessions("large", 6)
-        val loose = sessions("loose", 7)
-        val entries = allWorkspaceSessionEntries(small + large + loose,
-            listOf(workspace("small", small), workspace("large", large)))
+        val small = sessions("small", 5, "small")
+        val large = sessions("large", 6, "large")
+        val loose = sessions("loose", 7, null)
+        val entries = allSceneSessionEntries(
+            small + large + loose,
+            listOf(scene("small"), scene("large"))
+        )
 
         assertEquals(15, entries.filterIsInstance<WorkspaceSessionListEntry.Session>().size)
         assertEquals(18, entries.filterIsInstance<WorkspaceSessionListEntry.Header>().sumOf { it.count })
-        assertFalse(entries.filterIsInstance<WorkspaceSessionListEntry.Toggle>().any { it.workspaceId == "small" })
+        assertFalse(entries.filterIsInstance<WorkspaceSessionListEntry.Toggle>().any { it.sectionId == "small" })
         assertTrue(entries.contains(WorkspaceSessionListEntry.Toggle("large", 1, false)))
-        assertTrue(entries.contains(WorkspaceSessionListEntry.Toggle(AndroidSharedStateHolder.UNGROUPED_WORKSPACE_ID, 2, false)))
+        assertTrue(entries.contains(WorkspaceSessionListEntry.Toggle(UNGROUPED_SCENE_SECTION_ID, 2, false)))
     }
 
     @Test
     fun expansionIsIndependentAndCollapsingRestoresTheSameRowsAndKeys() {
-        val first = sessions("first", 6)
-        val second = sessions("second", 7)
-        val rows = first + second
-        val groups = listOf(workspace("w1", first), workspace("w2", second))
-        val collapsed = allWorkspaceSessionEntries(rows, groups)
-        val expanded = allWorkspaceSessionEntries(rows, groups, setOf("w1"))
+        val first = sessions("first", 6, "alpha")
+        val second = sessions("second", 7, "beta")
+        val scenes = listOf(scene("alpha"), scene("beta"))
+        val collapsed = allSceneSessionEntries(first + second, scenes)
+        val expanded = allSceneSessionEntries(first + second, scenes, setOf("alpha"))
 
         assertEquals(11, expanded.filterIsInstance<WorkspaceSessionListEntry.Session>().size)
-        assertTrue(expanded.contains(WorkspaceSessionListEntry.Toggle("w1", 1, true)))
-        assertTrue(expanded.contains(WorkspaceSessionListEntry.Toggle("w2", 2, false)))
+        assertTrue(expanded.contains(WorkspaceSessionListEntry.Toggle("alpha", 1, true)))
+        assertTrue(expanded.contains(WorkspaceSessionListEntry.Toggle("beta", 2, false)))
         assertEquals(expanded.size, expanded.map { it.key }.toSet().size)
-        assertEquals(collapsed, allWorkspaceSessionEntries(rows, groups, emptySet()))
-        assertEquals(collapsed.map { it.key }.toSet(), expanded.map { it.key }.toSet() - "session-first-0")
+        assertEquals(collapsed, allSceneSessionEntries(first + second, scenes, emptySet()))
+        assertEquals(
+            collapsed.map { it.key }.toSet(),
+            expanded.map { it.key }.toSet() - "session-first-0"
+        )
     }
 
     @Test
-    fun groupsAndRowsUseLatestActivityAndDuplicateMembershipDoesNotDuplicateSessions() {
-        val a = SessionSummary("a", "a", 10.0, false, false)
-        val b = SessionSummary("b", "b", 30.0, false, false)
-        val c = SessionSummary("c", "c", 20.0, false, false)
-        val entries = allWorkspaceSessionEntries(listOf(a, c, b),
-            listOf(workspace("w1", listOf(a, c)), workspace("w2", listOf(a, b))))
+    fun catalogOrderControlsSectionsAndRowsUseLatestActivity() {
+        val a = session("a", 10.0, "alpha")
+        val b = session("b", 30.0, "beta")
+        val c = session("c", 20.0, "alpha")
+        val unknown = session("unknown", 5.0, "gamma")
+        val entries = allSceneSessionEntries(
+            listOf(a, c, b, unknown),
+            listOf(scene("beta"), scene("alpha"))
+        )
 
-        assertEquals(listOf("w2", "w1"), entries.filterIsInstance<WorkspaceSessionListEntry.Header>().map { it.workspaceId })
-        assertEquals(listOf("工作区 w2", "工作区 w1"), entries.filterIsInstance<WorkspaceSessionListEntry.Header>().map { it.title })
-        assertEquals(listOf("b", "c", "a"), entries.filterIsInstance<WorkspaceSessionListEntry.Session>().map { it.session.id })
+        assertEquals(
+            listOf("beta", "alpha", "gamma"),
+            entries.filterIsInstance<WorkspaceSessionListEntry.Header>().map { it.sectionId }
+        )
+        assertEquals(
+            listOf("b", "c", "a", "unknown"),
+            entries.filterIsInstance<WorkspaceSessionListEntry.Session>().map { it.session.id }
+        )
     }
 
     @Test
     fun tenThousandSessionsCollapseWithoutLosingTotalsAndAllRemainAvailableWhenExpanded() {
-        val groups = (0..<100).map { workspace("w$it", sessions("s$it", 100)) }
-        val rows = groups.flatMap { group -> sessions("s${group.workspaceId.drop(1)}", 100) }
-        val collapsed = allWorkspaceSessionEntries(rows, groups)
+        val scenes = (0..<100).map { scene("s$it") }
+        val rows = scenes.flatMap { scene -> sessions(scene.agentPresetId, 100, scene.agentPresetId) }
+        val collapsed = allSceneSessionEntries(rows, scenes)
         assertEquals(500, collapsed.filterIsInstance<WorkspaceSessionListEntry.Session>().size)
         assertEquals(10_000, collapsed.filterIsInstance<WorkspaceSessionListEntry.Header>().sumOf { it.count })
-        val expanded = allWorkspaceSessionEntries(rows, groups, groups.mapTo(mutableSetOf()) { it.workspaceId })
+        val expanded = allSceneSessionEntries(rows, scenes, scenes.mapTo(mutableSetOf()) { it.agentPresetId })
         assertEquals(10_000, expanded.filterIsInstance<WorkspaceSessionListEntry.Session>().size)
         assertEquals(10_200, expanded.size)
         assertEquals(expanded.size, expanded.map { it.key }.toSet().size)
     }
 
     @Test
-    fun emptyInputAndFilteredResultsDoNotCreateEmptySectionsOrUnnecessaryToggles() {
-        val rows = sessions("s", 10)
-        val groups = listOf(workspace("w", rows))
-        assertTrue(allWorkspaceSessionEntries(emptyList(), groups).isEmpty())
-        val filtered = allWorkspaceSessionEntries(rows.take(2), groups, setOf("w"))
+    fun searchCanHideEmptyScenesAndFilteredResultsKeepExactCounts() {
+        val rows = sessions("alpha", 10, "alpha")
+        val scenes = listOf(scene("alpha"), scene("beta"))
+        val fullDirectory = allSceneSessionEntries(rows, scenes)
+        assertEquals(2, fullDirectory.filterIsInstance<WorkspaceSessionListEntry.Header>().size)
+
+        val filtered = allSceneSessionEntries(
+            sessions = rows.take(2),
+            scenes = scenes,
+            includeEmptyScenes = false
+        )
         assertEquals(2, filtered.filterIsInstance<WorkspaceSessionListEntry.Session>().size)
         assertEquals(2, filtered.filterIsInstance<WorkspaceSessionListEntry.Header>().single().count)
         assertTrue(filtered.filterIsInstance<WorkspaceSessionListEntry.Toggle>().isEmpty())
+        assertTrue(allSceneSessionEntries(emptyList(), emptyList()).isEmpty())
     }
 
-    private fun sessions(prefix: String, count: Int): List<SessionSummary> =
-        (0..<count).map { SessionSummary("$prefix-$it", "$prefix $it", it.toDouble(), false, false) }
+    private fun sessions(prefix: String, count: Int, agentPreset: String? = prefix): List<SessionSummary> =
+        (0..<count).map { index ->
+            session(
+                id = "$prefix-$index",
+                updatedAt = index.toDouble(),
+                agentPreset = agentPreset
+            )
+        }
 
-    private fun workspace(id: String, sessions: List<SessionSummary>) =
-        GatewayWorkspace(id, "/$id", "工作区 $id", sessions.map { it.id }, "", "")
+    private fun session(id: String, updatedAt: Double, agentPreset: String?): SessionSummary =
+        SessionSummary(
+            id = id,
+            title = id,
+            lastActivityEpochSeconds = updatedAt,
+            isRunning = false,
+            hasUnread = false,
+            agentPreset = agentPreset
+        )
+
+    private fun scene(id: String) = SceneSessionSection(id, "场景 $id")
 }

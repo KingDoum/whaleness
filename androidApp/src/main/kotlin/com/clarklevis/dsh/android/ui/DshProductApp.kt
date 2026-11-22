@@ -260,6 +260,13 @@ internal fun DshProductApp(
                             }
                         }
                     },
+                    onNewSessionInScene = { agentPresetId ->
+                        workspaceScope.launch {
+                            if (stateHolder.prepareNewSession(agentPresetOverride = agentPresetId)) {
+                                navController.navigate(ROUTE_CONVERSATION)
+                            }
+                        }
+                    },
                     onSettings = { navController.navigate(ROUTE_SETTINGS) },
                     onPlugins = { navController.navigate(ROUTE_PLUGINS) },
                     onScheduledTasks = { navController.navigate(ROUTE_SCHEDULED_TASKS) },
@@ -418,6 +425,7 @@ internal fun WorkspaceScreen(
     stateHolder: AndroidSharedStateHolder,
     onOpenSession: (String) -> Unit,
     onNewSession: () -> Unit,
+    onNewSessionInScene: (String) -> Unit,
     onSettings: () -> Unit,
     onPlugins: () -> Unit,
     onScheduledTasks: () -> Unit,
@@ -452,6 +460,13 @@ internal fun WorkspaceScreen(
 
     val workspaces = stateHolder.availableWorkspaces
     val selectedWorkspace = stateHolder.activeWorkspace
+    val sceneSections = remember(stateHolder.snapshot.agentPresets) {
+        stateHolder.snapshot.agentPresets.asSequence()
+            .filter { it.id.isNotBlank() && it.broken != true }
+            .map { SceneSessionSection(it.id, agentPresetDisplayName(it.id, it.name)) }
+            .distinctBy(SceneSessionSection::agentPresetId)
+            .toList()
+    }
     // 单工作区视图使用归属标签；同一索引也用于快速统计未分组会话。
     val sessionFolderLabels = remember(workspaces) {
         buildMap { workspaces.forEach { ws -> ws.sessionIds.forEach { sid -> put(sid, ws.title) } } }
@@ -500,13 +515,18 @@ internal fun WorkspaceScreen(
     val sessionEntries by produceState(
         initialValue = emptyList<WorkspaceSessionListEntry>(),
         key1 = sessions,
-        key2 = workspaces,
-        key3 = Triple(showingAllWorkspaces, sessionScopeId, expandedSectionIds)
+        key2 = sceneSections,
+        key3 = Triple(showingAllWorkspaces, sessionScopeId, searchQuery.isBlank() to expandedSectionIds)
     ) {
         val expandedIds = expandedSectionIds.toSet()
         value = withContext(Dispatchers.Default) {
             if (showingAllWorkspaces) {
-                allWorkspaceSessionEntries(sessions, workspaces, expandedIds)
+                allSceneSessionEntries(
+                    sessions = sessions,
+                    scenes = sceneSections,
+                    expandedSectionIds = expandedIds,
+                    includeEmptyScenes = searchQuery.isBlank()
+                )
             } else {
                 recentWorkspaceSessionEntries(
                     sessions, sessionScopeId, expandedIds
@@ -608,7 +628,7 @@ internal fun WorkspaceScreen(
                 },
                 recentSessions = {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(if (showingAllWorkspaces) appText("全部会话") else appText("最近会话"),
+                        Text(if (showingAllWorkspaces) appText("全部场景") else appText("最近会话"),
                             color = Color.White, fontWeight = FontWeight.SemiBold, fontSize = 17.sp)
                         Spacer(Modifier.weight(1f))
                         ConnectionStatusText(stateHolder.gatewayState)
@@ -623,7 +643,10 @@ internal fun WorkspaceScreen(
                     items(sessionEntries, key = { it.key }, contentType = { it::class }) { entry ->
                         AdaptiveWorkspaceSessionContent(window, inColumn = workspaceColumns) {
                             when (entry) {
-                                is WorkspaceSessionListEntry.Header -> WorkspaceSessionSectionHeader(entry)
+                                is WorkspaceSessionListEntry.Header -> WorkspaceSessionSectionHeader(
+                                    entry,
+                                    onCreateSession = onNewSessionInScene
+                                )
                                 is WorkspaceSessionListEntry.Toggle -> WorkspaceSessionSectionToggle(entry) { id ->
                                     expandedSectionIds = if (id in expandedSectionIds) expandedSectionIds - id else expandedSectionIds + id
                                 }
@@ -788,7 +811,7 @@ private fun WorkspaceCard(
         )
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(0.dp)) {
             Text(
-                if (allWorkspaces) appText("全部会话")
+                if (allWorkspaces) appText("全部场景")
                 else if (ungrouped) appText("未分组")
                 else workspace?.title ?: "DeepseekHarnessProject",
                 color = Color.White,
@@ -797,7 +820,7 @@ private fun WorkspaceCard(
                 fontWeight = FontWeight.SemiBold
             )
             Text(
-                if (allWorkspaces) appText("%1\$s 个会话（跨全部工作区）", sessionCount)
+                if (allWorkspaces) appText("%1\$s 个会话（按场景浏览全部工作区）", sessionCount)
                 else if (ungrouped) appText("%1\$s 个未归属会话", ungroupedCount)
                 else workspace?.path ?: appText("通过 Mobile Gateway 连接"),
                 color = Color.White.copy(alpha = 0.55f),

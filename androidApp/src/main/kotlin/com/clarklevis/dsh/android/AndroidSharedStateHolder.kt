@@ -1427,8 +1427,12 @@ class AndroidSharedStateHolder(
         }
     }
 
-    suspend fun prepareNewSession(useDefaultWorkspace: Boolean = false, replacementWorkspaceId: String? = null,
-                                  workspaceSelectionToken: Long = 0): Boolean {
+    suspend fun prepareNewSession(
+        useDefaultWorkspace: Boolean = false,
+        replacementWorkspaceId: String? = null,
+        workspaceSelectionToken: Long = 0,
+        agentPresetOverride: String? = null
+    ): Boolean {
         teamLeadSessionId = null
         teamSnapshot = com.clarklevis.dsh.shared.facade.TeamSnapshot()
         if (preparingNewSession) return false
@@ -1453,8 +1457,10 @@ class AndroidSharedStateHolder(
             // 先登记再发送，快速返回的本地网关也不会丢失创建结果。
             val response = pendingSessionCreation.begin(requestId)
             val event = try {
+                val requestedPreset = agentPresetOverride?.trim()?.takeIf(String::isNotEmpty)
+                    ?: previousPreset.takeIf { workspaceSelectionToken != 0L }
                 if (!appGraph.gatewayRuntime.sendRequest(
-                        GatewayRequests.createSession(requestId, workspaceId, previousPreset.takeIf { workspaceSelectionToken != 0L })
+                        GatewayRequests.createSession(requestId, workspaceId, requestedPreset)
                     )
                 ) {
                     null

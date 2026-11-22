@@ -1,19 +1,23 @@
 package com.clarklevis.dsh.android.ui
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
@@ -24,29 +28,39 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.clarklevis.dsh.android.AndroidSharedStateHolder
 import com.clarklevis.dsh.android.R
 import com.clarklevis.dsh.android.localization.appText
 import com.clarklevis.dsh.shared.domain.SessionSummary
-import com.clarklevis.dsh.shared.protocol.GatewayWorkspace
 
 private const val COLLAPSED_SECTION_LIMIT = 5
 private const val COLLAPSED_RECENT_LIMIT = 12
+internal const val UNGROUPED_SCENE_SECTION_ID = "__ungrouped_scene__"
 
-/** 主页会话的懒加载条目；全部会话额外显示工作区分区，展开前后 key 保持稳定。 */
+internal data class SceneSessionSection(
+    val agentPresetId: String,
+    val title: String
+)
+
+/** 主页会话的懒加载条目；全部场景按 Agent 预设分区，展开前后 key 保持稳定。 */
 internal sealed interface WorkspaceSessionListEntry {
     val key: String
 
-    data class Header(val workspaceId: String, val title: String, val number: Int, val count: Int) : WorkspaceSessionListEntry {
-        override val key: String get() = "section-$workspaceId"
+    data class Header(
+        val sectionId: String,
+        val title: String,
+        val number: Int,
+        val count: Int,
+        val agentPresetId: String? = null
+    ) : WorkspaceSessionListEntry {
+        override val key: String get() = "section-$sectionId"
     }
 
     data class Session(val session: SessionSummary) : WorkspaceSessionListEntry {
         override val key: String get() = "session-${session.id}"
     }
 
-    data class Toggle(val workspaceId: String, val remainingCount: Int, val expanded: Boolean) : WorkspaceSessionListEntry {
-        override val key: String get() = "toggle-$workspaceId"
+    data class Toggle(val sectionId: String, val remainingCount: Int, val expanded: Boolean) : WorkspaceSessionListEntry {
+        override val key: String get() = "toggle-$sectionId"
     }
 }
 
@@ -67,59 +81,107 @@ internal fun recentWorkspaceSessionEntries(
     }
 }
 
-/** 输入已经过工作区和搜索过滤；此处一次性建立归属索引，避免逐行扫描所有工作区。 */
-internal fun allWorkspaceSessionEntries(
+/**
+ * 全部场景目录。已知预设即使暂时没有会话也保留为可进入的空场景；
+ * 搜索时隐藏空场景，避免结果页被空目录占满。
+ */
+internal fun allSceneSessionEntries(
     sessions: List<SessionSummary>,
-    workspaces: List<GatewayWorkspace>,
-    expandedSectionIds: Set<String> = emptySet()
+    scenes: List<SceneSessionSection>,
+    expandedSectionIds: Set<String> = emptySet(),
+    includeEmptyScenes: Boolean = true
 ): List<WorkspaceSessionListEntry> {
-    val owners = buildMap {
-        workspaces.forEach { workspace ->
-            workspace.sessionIds.forEach { id ->
-                if (id !in this) put(id, workspace.workspaceId)
-            }
-        }
+    val scenesById = linkedMapOf<String, SceneSessionSection>()
+    scenes.forEach { scene ->
+        val id = scene.agentPresetId.trim()
+        if (id.isNotEmpty()) scenesById.putIfAbsent(id, scene.copy(agentPresetId = id))
     }
-    val titles = workspaces.associate { workspace ->
-        workspace.workspaceId to workspace.title.ifBlank {
-            workspace.path.trimEnd('/').substringAfterLast('/').ifBlank { appText("工作区") }
-        }
-    }
-    val sorted = sessions.sortedWith(compareByDescending<SessionSummary> { it.lastActivityEpochSeconds }.thenBy { it.id })
-    val groups = sorted.groupBy { owners[it.id] ?: AndroidSharedStateHolder.UNGROUPED_WORKSPACE_ID }
-    val ordered = groups.entries.sortedWith(
-        compareByDescending<Map.Entry<String, List<SessionSummary>>> { it.value.first().lastActivityEpochSeconds }
-            .thenBy { it.key }
+    val sorted = sessions.sortedWith(
+        compareByDescending<SessionSummary> { it.lastActivityEpochSeconds }.thenBy { it.id }
     )
+    val byPreset = sorted.groupBy { it.agentPreset?.trim()?.takeIf(String::isNotEmpty) }
+    byPreset.keys.filterNotNull().forEach { presetId ->
+        scenesById.putIfAbsent(presetId, SceneSessionSection(presetId, presetId))
+    }
+
+    val ordered = scenesById.values.map { scene -> scene to byPreset[scene.agentPresetId].orEmpty() } +
+        (listOf<Pair<SceneSessionSection?, List<SessionSummary>>>(null to byPreset[null].orEmpty()))
+
     return buildList {
-        ordered.forEachIndexed { index, (id, rows) ->
-            val expanded = id in expandedSectionIds
-            add(WorkspaceSessionListEntry.Header(id, titles[id] ?: appText("未分组"), index + 1, rows.size))
+        ordered.forEachIndexed { index, (scene, rows) ->
+            if (scene == null) {
+                if (rows.isEmpty()) return@forEachIndexed
+                val expanded = UNGROUPED_SCENE_SECTION_ID in expandedSectionIds
+                add(WorkspaceSessionListEntry.Header(UNGROUPED_SCENE_SECTION_ID, appText("未分组"), index + 1, rows.size))
+                val visible = if (expanded) rows else rows.take(COLLAPSED_SECTION_LIMIT)
+                visible.forEach { add(WorkspaceSessionListEntry.Session(it)) }
+                if (rows.size > COLLAPSED_SECTION_LIMIT) {
+                    add(WorkspaceSessionListEntry.Toggle(
+                        UNGROUPED_SCENE_SECTION_ID,
+                        rows.size - COLLAPSED_SECTION_LIMIT,
+                        expanded
+                    ))
+                }
+                return@forEachIndexed
+            }
+            if (!includeEmptyScenes && rows.isEmpty()) return@forEachIndexed
+            val expanded = scene.agentPresetId in expandedSectionIds
+            add(WorkspaceSessionListEntry.Header(
+                sectionId = scene.agentPresetId,
+                title = scene.title.ifBlank { scene.agentPresetId },
+                number = index + 1,
+                count = rows.size,
+                agentPresetId = scene.agentPresetId
+            ))
             val visible = if (expanded) rows else rows.take(COLLAPSED_SECTION_LIMIT)
             visible.forEach { add(WorkspaceSessionListEntry.Session(it)) }
             if (rows.size > COLLAPSED_SECTION_LIMIT) {
-                add(WorkspaceSessionListEntry.Toggle(id, rows.size - COLLAPSED_SECTION_LIMIT, expanded))
+                add(WorkspaceSessionListEntry.Toggle(
+                    scene.agentPresetId,
+                    rows.size - COLLAPSED_SECTION_LIMIT,
+                    expanded
+                ))
             }
         }
     }
 }
 
 @Composable
-internal fun WorkspaceSessionSectionHeader(entry: WorkspaceSessionListEntry.Header) {
+internal fun WorkspaceSessionSectionHeader(
+    entry: WorkspaceSessionListEntry.Header,
+    onCreateSession: ((String) -> Unit)? = null
+) {
     Row(
         modifier = Modifier.fillMaxWidth()
             .padding(top = if (entry.number == 1) 8.dp else 24.dp, bottom = 8.dp)
-            .semantics(mergeDescendants = true) {
+            .semantics {
                 heading()
-                contentDescription = if (entry.count == 1) appText("工作区 %1\$s，1 个会话", entry.title)
-                    else appText("工作区 %1\$s，%2\$s 个会话", entry.title, entry.count)
+                contentDescription = if (entry.count == 1) appText("场景 %1\$s，1 个会话", entry.title)
+                    else appText("场景 %1\$s，%2\$s 个会话", entry.title, entry.count)
             }
-            .testTag("workspace-section-${entry.workspaceId}"),
+            .testTag("scene-section-${entry.sectionId}"),
         horizontalArrangement = Arrangement.spacedBy(10.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Text(entry.title, modifier = Modifier.weight(1f), color = Color.White.copy(alpha = 0.62f),
             fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        val presetId = entry.agentPresetId
+        if (presetId != null && onCreateSession != null) {
+            Box(
+                modifier = Modifier
+                    .size(28.dp)
+                    .clip(CircleShape)
+                    .background(Color.White.copy(alpha = 0.08f))
+                    .clickable(role = Role.Button) { onCreateSession(presetId) }
+                    .semantics {
+                        contentDescription = appText("在“%1\$s”场景新建会话", entry.title)
+                    }
+                    .testTag("scene-section-create-${entry.sectionId}"),
+                contentAlignment = Alignment.Center
+            ) {
+                Text("+", color = Color.White.copy(alpha = 0.78f), fontSize = 18.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.Medium)
+            }
+        }
         HorizontalDivider(Modifier.width(28.dp), thickness = 0.5.dp, color = Color.White.copy(alpha = 0.12f))
         Text(appText("%1\$s 个会话", entry.count), color = Color.White.copy(alpha = 0.4f), fontSize = 12.sp)
     }
@@ -129,9 +191,9 @@ internal fun WorkspaceSessionSectionHeader(entry: WorkspaceSessionListEntry.Head
 internal fun WorkspaceSessionSectionToggle(entry: WorkspaceSessionListEntry.Toggle, onToggle: (String) -> Unit) {
     Row(
         modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)
-            .clickable(role = Role.Button) { onToggle(entry.workspaceId) }
+            .clickable(role = Role.Button) { onToggle(entry.sectionId) }
             .padding(start = 18.dp)
-            .testTag("workspace-section-toggle-${entry.workspaceId}"),
+            .testTag("scene-section-toggle-${entry.sectionId}"),
         horizontalArrangement = Arrangement.spacedBy(6.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
